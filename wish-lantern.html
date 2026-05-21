@@ -1,0 +1,686 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Wish Lantern</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{width:100%;height:100%;overflow:hidden;background:#080c1a;font-family:'Georgia',serif}
+  #gameCanvas{display:block;touch-action:none}
+  #ui{position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:10}
+  #score-display{position:absolute;top:18px;left:50%;transform:translateX(-50%);color:rgba(255,220,100,0.9);font-size:22px;font-weight:400;letter-spacing:3px;text-shadow:0 0 20px rgba(255,180,50,0.8);font-family:'Georgia',serif;pointer-events:none}
+  #combo-display{position:absolute;top:48px;left:50%;transform:translateX(-50%);color:rgba(255,160,80,0.8);font-size:13px;letter-spacing:2px;text-shadow:0 0 10px rgba(255,120,50,0.6);pointer-events:none;opacity:0;transition:opacity 0.3s}
+  #overlay{position:fixed;top:0;left:0;width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;background:rgba(5,8,20,0.92);z-index:20;pointer-events:all;transition:opacity 0.6s}
+  .overlay-title{color:#ffd874;font-size:38px;letter-spacing:6px;text-shadow:0 0 40px rgba(255,200,80,0.9),0 0 80px rgba(255,150,50,0.5);margin-bottom:8px;font-family:'Georgia',serif}
+  .overlay-sub{color:rgba(255,200,120,0.6);font-size:13px;letter-spacing:4px;margin-bottom:48px}
+  .big-score{color:#ffd874;font-size:56px;letter-spacing:2px;text-shadow:0 0 30px rgba(255,200,80,0.8);margin-bottom:8px}
+  .score-label{color:rgba(255,180,100,0.5);font-size:11px;letter-spacing:4px;margin-bottom:4px;text-transform:uppercase}
+  .best-score{color:rgba(255,200,120,0.7);font-size:20px;letter-spacing:2px;margin-bottom:48px}
+  .play-btn{background:none;border:1px solid rgba(255,210,100,0.5);color:#ffd874;font-size:15px;letter-spacing:5px;padding:14px 48px;cursor:pointer;font-family:'Georgia',serif;text-transform:uppercase;transition:all 0.3s;pointer-events:all}
+  .play-btn:hover{background:rgba(255,210,100,0.08);border-color:rgba(255,210,100,0.9);text-shadow:0 0 20px rgba(255,200,80,0.8);box-shadow:0 0 30px rgba(255,180,50,0.2)}
+  .lantern-icon{font-size:60px;margin-bottom:24px;animation:float 3s ease-in-out infinite}
+  @keyframes float{0%,100%{transform:translateY(0) rotate(-3deg)}50%{transform:translateY(-10px) rotate(3deg)}}
+  .high-score-row{display:flex;gap:40px;margin-bottom:48px}
+  .score-block{text-align:center}
+  #skin-select{display:flex;gap:12px;margin-bottom:28px}
+  .skin-btn{background:none;border:1px solid rgba(255,210,100,0.3);color:rgba(255,200,100,0.7);font-size:11px;letter-spacing:2px;padding:8px 14px;cursor:pointer;font-family:'Georgia',serif;transition:all 0.3s;pointer-events:all}
+  .skin-btn.active{border-color:rgba(255,210,100,0.9);color:#ffd874;background:rgba(255,210,100,0.08)}
+  .skin-btn:disabled{opacity:0.3;cursor:default}
+  #tip{position:absolute;bottom:28px;color:rgba(255,200,100,0.4);font-size:11px;letter-spacing:3px}
+</style>
+</head>
+<body>
+<canvas id="gameCanvas"></canvas>
+<div id="ui">
+  <div id="score-display" style="display:none">0</div>
+  <div id="combo-display"></div>
+</div>
+<div id="overlay">
+  <div class="lantern-icon">🏮</div>
+  <div class="overlay-title">WISH LANTERN</div>
+  <div class="overlay-sub">a peaceful lantern against the night</div>
+  <div id="skin-select">
+    <button class="skin-btn active" data-skin="classic">Classic</button>
+    <button class="skin-btn" data-skin="sakura">Sakura</button>
+    <button class="skin-btn" data-skin="celestial" id="celestial-btn">Celestial</button>
+  </div>
+  <button class="play-btn" id="playBtn">Begin</button>
+  <div id="tip">tap or press space to rise · survive the sky</div>
+</div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const overlay = document.getElementById('overlay');
+const scoreEl = document.getElementById('score-display');
+const comboEl = document.getElementById('combo-display');
+
+const W = () => canvas.width / dpr;
+const H = () => canvas.height / dpr;
+let dpr = Math.min(window.devicePixelRatio || 1, 2);
+let raf, gameState = 'menu', score = 0, bestScore = 0, combo = 0, comboTimer = 0;
+
+const SKINS = {
+  classic:   { body:'#e8842a', glow:'#ff9f40', string:'#c87820', accent:'#ffd180', req:0 },
+  sakura:    { body:'#e8a0b8', glow:'#ffb8d0', string:'#d48090', accent:'#ffe0ea', req:0 },
+  celestial: { body:'#7090e8', glow:'#90b0ff', string:'#5060c8', accent:'#c0d0ff', req:500 }
+};
+let currentSkin = 'classic';
+
+try { bestScore = parseInt(localStorage.getItem('wl_best') || '0') || 0; } catch(e) {}
+
+function resize() {
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const w = window.innerWidth, h = window.innerHeight;
+  canvas.width = Math.round(w * dpr);
+  canvas.height = Math.round(h * dpr);
+  canvas.style.width = w + 'px';
+  canvas.style.height = h + 'px';
+  ctx.setTransform(1,0,0,1,0,0);
+  ctx.scale(dpr, dpr);
+}
+resize();
+window.addEventListener('resize', resize);
+
+// Stars
+const stars = [];
+for (let i = 0; i < 140; i++) stars.push({
+  x: Math.random() * 2000,
+  y: Math.random() * 4000,
+  s: Math.random() * 1.5 + 0.3,
+  b: Math.random()
+});
+
+// Game state
+let lantern, cameraY = 0, wind = {x:0,y:0,targetX:0,targetY:0,timer:0};
+let obstacles = [], particles = [], embers = [], fogClouds = [];
+let gameSpeed = 1, shakeX = 0, shakeY = 0, flapCooldown = 0;
+spawnFog(); // populate fog before first frame
+
+function initGame() {
+  lantern = { x: W()*0.25, y: H()*0.5, vy: 0, vx: 0, angle: 0, angleV: 0, flickerT: 0, alive: true, deathTimer: 0 };
+  cameraY = 0; gameSpeed = 1;
+  wind = { x: 0, y: 0, targetX: 0, targetY: 0, timer: 0 };
+  obstacles = []; particles = []; embers = []; fogClouds = [];
+  score = 0; combo = 0; comboTimer = 0; flapCooldown = 0;
+  shakeX = 0; shakeY = 0;
+  spawnTimer = 0; lastBranchCx = null;
+  spawnFog();
+  // Seed 3 obstacles already on screen so player isn't waiting
+  for (let i = 0; i < 3; i++) spawnObstacleAt(-60 - i * H() * 0.45);
+}
+
+// Wind
+function updateWind(dt) {
+  wind.timer -= dt;
+  if (wind.timer <= 0) {
+    wind.targetX = (Math.random() - 0.5) * 0.6;
+    wind.targetY = (Math.random() - 0.5) * 0.15;
+    wind.timer = 2000 + Math.random() * 3000;
+  }
+  wind.x += (wind.targetX - wind.x) * 0.002 * dt;
+  wind.y += (wind.targetY - wind.y) * 0.002 * dt;
+}
+
+// Obstacles
+let spawnTimer = 0;
+let lastBranchCx = null; // track last branch gap so next one stays reachable
+
+function spawnObstacleAt(y) {
+  // Bird probability: 0% until score 50, ramps to 30% by score 120
+  const birdChance = score < 50 ? 0 : Math.min((score - 50) / 70, 1) * 0.30;
+  const cloudChance = 0.10;
+  const rand = Math.random();
+  let type;
+  if (rand < birdChance) type = 'bird';
+  else if (rand < birdChance + cloudChance) type = 'cloud';
+  else type = 'branch';
+
+  // Gap: starts very generous, shrinks slowly, never below 150px
+  const gap = Math.max(150, W()*0.48 - score*0.03);
+  const hw  = gap / 2;
+
+  // Keep gap fully on screen with comfortable margin
+  const margin = 40;
+  const minCx = margin + hw;
+  const maxCx = W() - margin - hw;
+
+  let cx;
+  if (type === 'branch' && lastBranchCx !== null) {
+    // New gap must be reachable from the last one — shift by at most 30% of screen width
+    const maxShift = W() * 0.30;
+    const lo = Math.max(minCx, lastBranchCx - maxShift);
+    const hi = Math.min(maxCx, lastBranchCx + maxShift);
+    cx = lo + Math.random() * (hi - lo);
+  } else {
+    cx = minCx + Math.random() * (maxCx - minCx);
+  }
+
+  if (type === 'branch') lastBranchCx = cx;
+
+  obstacles.push({
+    type, y, cx, gap, hw, t: 0, done: false, passed: false,
+    birdX:  Math.random()<0.5 ? -80 : W()+80,
+    birdDir: Math.random()<0.5 ? 1 : -1,
+    cloudW: Math.max(60, W()*0.12 + Math.random()*W()*0.08) // cloud puffs sized to screen
+  });
+}
+
+function updateObstacles(dt) {
+  // Speed tier increases every 10 obstacles, starts gentle
+  const tier = Math.floor(score / 10);
+  gameSpeed = 1 + tier * 0.18; // 1.0 → 1.18 → 1.36 ... capped below
+  gameSpeed = Math.min(gameSpeed, 2.8);
+
+  const scroll = gameSpeed * 1.4 * dt / 16;
+
+  // Spawn interval shrinks every 10 obstacles: starts at 2.4s, min 1.0s
+  const spawnInterval = Math.max(1000, 2400 - tier * 140);
+  spawnTimer += dt;
+  if (spawnTimer >= spawnInterval) {
+    spawnObstacleAt(-80);
+    spawnTimer = 0;
+  }
+
+  // Move every obstacle downward and check state
+  for (let i = obstacles.length - 1; i >= 0; i--) {
+    const o = obstacles[i];
+    o.t   += dt;
+    o.y   += scroll;
+    if (o.type === 'bird') o.birdX += o.birdDir * 2.5 * dt/16;
+
+    // Off the bottom — obstacle fully cleared, award 1 point
+    if (o.y > H() + 120) {
+      if (!o.passed) {
+        o.passed = true;
+        score++;
+        combo++;
+        comboTimer = 3000;
+        showCombo();
+      }
+      obstacles.splice(i, 1);
+      continue;
+    }
+
+    if (!o.done && checkCollision(o)) { hitLantern(); o.done = true; }
+  }
+}
+
+function checkCollision(o) {
+  if (!lantern.alive) return false;
+  const lx = lantern.x, ly = lantern.y, lr = 17;
+  const dist = Math.abs(o.y - ly);
+  if (dist > 44) return false;
+  if (o.type === 'branch' || o.type === 'cloud') {
+    if (lx < o.cx - o.hw - lr || lx > o.cx + o.hw + lr) return dist < 28;
+    return false;
+  }
+  if (o.type === 'wire') {
+    if (lx < o.cx - o.hw - lr || lx > o.cx + o.hw + lr) return dist < 11;
+    return false;
+  }
+  if (o.type === 'bird') {
+    return Math.abs(lx - o.birdX) < 22 && dist < 14;
+  }
+  return false;
+}
+
+function hitLantern() {
+  if (!lantern.alive) return;
+  lantern.alive = false;
+  screenShake(14);
+  for (let i = 0; i < 45; i++) spawnEmber(lantern.x, lantern.y);
+}
+
+// Particles
+function spawnFlame(x, y) {
+  for (let i = 0; i < 4; i++) particles.push({
+    x, y, vx:(Math.random()-0.5)*1.5, vy:-Math.random()*3-1,
+    life:1, maxLife:0.5+Math.random()*0.4, size:Math.random()*6+2
+  });
+}
+function spawnEmber(x, y) {
+  embers.push({
+    x, y, vx:(Math.random()-0.5)*6, vy:(Math.random()-0.5)*5-2,
+    life:1, size:Math.random()*4+1,
+    col:`hsl(${30+Math.random()*30},100%,${60+Math.random()*20}%)`
+  });
+}
+function spawnFog() {
+  for (let i = 0; i < 7; i++) fogClouds.push({
+    x: Math.random()*2000, y: Math.random()*H()*3,
+    w: 160+Math.random()*220, h: 40+Math.random()*60,
+    alpha: 0.025+Math.random()*0.04
+  });
+}
+
+function updateParticles(dt) {
+  const t = dt/16;
+  for (let i = particles.length-1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx*t + wind.x*0.3*t; p.y += p.vy*t;
+    p.life -= t * 0.055 / p.maxLife;
+    if (p.life <= 0) particles.splice(i,1);
+  }
+  for (let i = embers.length-1; i >= 0; i--) {
+    const e = embers[i];
+    e.x += e.vx*t; e.y += e.vy*t; e.vy += 0.09*t; e.life -= 0.016*t;
+    if (e.life <= 0) embers.splice(i,1);
+  }
+}
+
+// Lantern physics
+// nudgeX: horizontal impulse (-1=left, 0=neutral, +1=right) used by touch tilt (Option C)
+function flap(nudgeX = 0) {
+  if (!lantern.alive || flapCooldown > 0) return;
+  lantern.vy = -5.8;
+  lantern.vx += nudgeX * 2.8;
+  flapCooldown = 110;
+  spawnFlame(lantern.x, lantern.y+18);
+}
+
+// Arrow/WASD key state for desktop steering (Option A)
+const keys = {};
+document.addEventListener('keydown', e => { keys[e.code] = true; });
+document.addEventListener('keyup',   e => { keys[e.code] = false; });
+
+function screenShake(amt) {
+  shakeX = (Math.random()-0.5)*amt*2;
+  shakeY = (Math.random()-0.5)*amt*2;
+}
+
+function updateLantern(dt) {
+  const t = dt/16;
+  if (!lantern.alive) {
+    lantern.deathTimer += dt;
+    lantern.vy += 0.18*t; lantern.y += lantern.vy*t;
+    lantern.angle += 0.045*t;
+    if (lantern.deathTimer > 2200) endGame();
+    return;
+  }
+  flapCooldown = Math.max(0, flapCooldown - dt);
+  lantern.vy += 0.22*t;
+  lantern.vy += wind.y*0.3*t;
+  // Option A: arrow / WASD horizontal steering — snappier acceleration
+  if (keys['ArrowLeft']  || keys['KeyA']) lantern.vx -= 0.55*t;
+  if (keys['ArrowRight'] || keys['KeyD']) lantern.vx += 0.55*t;
+  lantern.vx = Math.max(-6, Math.min(6, lantern.vx)); // cap horizontal speed
+  // Wind drift — very subtle, just cosmetic atmosphere
+  lantern.vx += wind.x*0.06*t;
+  lantern.vx *= 0.91; // friction
+  lantern.vy = Math.max(-8, Math.min(8.5, lantern.vy));
+  lantern.y += lantern.vy*t;
+  lantern.x += lantern.vx*t;
+  lantern.x = Math.max(30, Math.min(W()-30, lantern.x));
+  lantern.angle += (lantern.vx*0.04 - lantern.angle)*0.08*t;
+  lantern.flickerT += dt*0.003;
+  score += dt * 0.013;
+  comboTimer -= dt;
+  if (comboTimer <= 0 && combo > 0) { combo = 0; comboEl.style.opacity='0'; }
+  if (shakeX) { shakeX *= 0.82; shakeY *= 0.82; if (Math.abs(shakeX)<0.1) shakeX=shakeY=0; }
+  if (lantern.y < 55) lantern.vy = Math.max(lantern.vy, 1.5);
+  if (lantern.y > H()-28) hitLantern();
+  if (Math.random() < 0.3*t) spawnFlame(lantern.x, lantern.y+18);
+}
+
+function showCombo() {
+  if (combo >= 2) { comboEl.textContent = combo+'× COMBO'; comboEl.style.opacity='1'; }
+}
+
+// Drawing
+function drawSky() {
+  const g = ctx.createLinearGradient(0,0,0,H());
+  g.addColorStop(0,'#030610');
+  g.addColorStop(0.4,'#080c22');
+  g.addColorStop(0.7,'#0e1035');
+  g.addColorStop(1,'#1a0a28');
+  ctx.fillStyle=g; ctx.fillRect(0,0,W(),H());
+}
+
+function drawMoon() {
+  const mx=W()*0.78, my=110;
+  const mg=ctx.createRadialGradient(mx,my,0,mx,my,85);
+  mg.addColorStop(0,'rgba(255,250,220,0.14)'); mg.addColorStop(1,'rgba(255,250,220,0)');
+  ctx.fillStyle=mg; ctx.beginPath(); ctx.arc(mx,my,85,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='rgba(250,248,230,0.88)'; ctx.beginPath(); ctx.arc(mx,my,28,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='rgba(235,228,190,0.22)'; ctx.beginPath(); ctx.arc(mx+8,my-4,26,0,Math.PI*2); ctx.fill();
+}
+
+function drawStars() {
+  const t=Date.now()*0.001;
+  ctx.save();
+  stars.forEach(s=>{
+    const sy=((s.y - cameraY*0.12)%H()+H())%H();
+    ctx.globalAlpha = s.b*0.8*(0.6+0.4*Math.sin(t*s.b*2+s.x));
+    ctx.fillStyle='#fff';
+    ctx.beginPath(); ctx.arc(s.x%W(),sy,s.s,0,Math.PI*2); ctx.fill();
+  });
+  ctx.globalAlpha=1; ctx.restore();
+}
+
+function drawFog() {
+  ctx.save();
+  fogClouds.forEach(f=>{
+    const fy=((f.y-cameraY*0.28)%H()+H())%H();
+    const g=ctx.createRadialGradient(f.x%W(),fy,0,f.x%W(),fy,f.w);
+    g.addColorStop(0,`rgba(100,120,180,${f.alpha})`);
+    g.addColorStop(1,'rgba(100,120,180,0)');
+    ctx.fillStyle=g; ctx.beginPath(); ctx.ellipse(f.x%W(),fy,f.w,f.h,0,0,Math.PI*2); ctx.fill();
+  });
+  ctx.globalAlpha=1; ctx.restore();
+}
+
+function drawBranch(cx,hw,y) {
+  ctx.strokeStyle='#3a2818'; ctx.lineWidth=13; ctx.lineCap='round';
+  ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(cx-hw,y); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(cx+hw,y); ctx.lineTo(W(),y); ctx.stroke();
+  ctx.strokeStyle='#5a4030'; ctx.lineWidth=6;
+  ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(cx-hw,y); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(cx+hw,y); ctx.lineTo(W(),y); ctx.stroke();
+  const g=ctx.createLinearGradient(0,y,0,y+22);
+  g.addColorStop(0,'rgba(60,40,20,0.45)'); g.addColorStop(1,'rgba(0,0,0,0)');
+  ctx.fillStyle=g;
+  ctx.fillRect(0,y,cx-hw,22); ctx.fillRect(cx+hw,y,W()-cx-hw,22);
+}
+
+function drawWire(cx,hw,y) {
+  ctx.strokeStyle='#8B6914'; ctx.lineWidth=2.5; ctx.lineCap='round';
+  const sag=10;
+  ctx.beginPath(); ctx.moveTo(0,y); ctx.quadraticCurveTo((cx-hw)/2,y+sag,cx-hw,y); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(cx+hw,y); ctx.quadraticCurveTo((cx+hw+W())/2,y+sag,W(),y); ctx.stroke();
+  ctx.strokeStyle='rgba(220,170,60,0.45)'; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.moveTo(0,y+1.5); ctx.lineTo(cx-hw,y+1.5); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(cx+hw,y+1.5); ctx.lineTo(W(),y+1.5); ctx.stroke();
+}
+
+function drawCloud(cx, hw, cw, y) {
+  for (let side = -1; side <= 1; side += 2) {
+    // Anchor the cloud so its inner edge sits naturally at the gap boundary
+    // The innermost puff centre is placed 1 puff-radius inside the gap edge
+    const cloudW = cw * 0.95;
+    const cloudH = cw * 0.58;
+    const innerEdge = side < 0 ? cx - hw : cx + hw;
+    const bx = side < 0 ? innerEdge - cloudW*0.55 : innerEdge + cloudW*0.55;
+
+    // No clip — puffs use radial gradients that fade to transparent naturally
+
+    // Dark stormy underbelly
+    const belly = ctx.createRadialGradient(bx, y+cloudH*0.35, 0, bx, y+cloudH*0.2, cloudW*0.9);
+    belly.addColorStop(0,   'rgba(45,35,65,0.88)');
+    belly.addColorStop(0.5, 'rgba(55,45,80,0.55)');
+    belly.addColorStop(1,   'rgba(30,20,50,0)');
+    ctx.fillStyle = belly;
+    ctx.beginPath(); ctx.ellipse(bx, y+cloudH*0.28, cloudW*0.8, cloudH*0.62, 0, 0, Math.PI*2); ctx.fill();
+
+    // Puff layout — inner puffs are smaller so they taper toward the gap naturally
+    // ox is relative to bx, positive = away from gap, negative = toward gap
+    const aw = side < 0 ? -1 : 1; // "away" direction
+    const puffs = [
+      // main body
+      {ox: aw*cloudW*0.05,  oy:-cloudH*0.08, rx:cloudW*0.62, ry:cloudH*0.50},
+      // outer puff (away from gap) — large
+      {ox: aw*cloudW*0.38,  oy: cloudH*0.05, rx:cloudW*0.48, ry:cloudH*0.38},
+      // inner puff (toward gap) — small and soft so it rounds off
+      {ox:-aw*cloudW*0.22,  oy: cloudH*0.10, rx:cloudW*0.30, ry:cloudH*0.26},
+      // top outer bump
+      {ox: aw*cloudW*0.22,  oy:-cloudH*0.30, rx:cloudW*0.36, ry:cloudH*0.28},
+      // top inner bump — tapers toward gap
+      {ox:-aw*cloudW*0.08,  oy:-cloudH*0.24, rx:cloudW*0.26, ry:cloudH*0.22},
+      // far outer puff
+      {ox: aw*cloudW*0.60,  oy: cloudH*0.12, rx:cloudW*0.35, ry:cloudH*0.28},
+    ];
+
+    puffs.forEach(p => {
+      const pg = ctx.createRadialGradient(
+        bx+p.ox - p.rx*0.18, y+p.oy - p.ry*0.22, 0,
+        bx+p.ox, y+p.oy, Math.max(p.rx, p.ry)
+      );
+      pg.addColorStop(0,    'rgba(215,195,235,0.88)');
+      pg.addColorStop(0.38, 'rgba(165,145,195,0.68)');
+      pg.addColorStop(0.72, 'rgba(90,72,125,0.38)');
+      pg.addColorStop(1,    'rgba(40,28,62,0)');
+      ctx.fillStyle = pg;
+      ctx.beginPath(); ctx.ellipse(bx+p.ox, y+p.oy, p.rx, p.ry, 0, 0, Math.PI*2); ctx.fill();
+    });
+
+    // Moonlight highlight on top outer edge
+    const hl = ctx.createRadialGradient(
+      bx + aw*cloudW*0.15, y - cloudH*0.32, 0,
+      bx + aw*cloudW*0.08, y - cloudH*0.18, cloudW*0.48
+    );
+    hl.addColorStop(0,   'rgba(245,230,255,0.58)');
+    hl.addColorStop(0.5, 'rgba(205,185,235,0.22)');
+    hl.addColorStop(1,   'rgba(180,160,220,0)');
+    ctx.fillStyle = hl;
+    ctx.beginPath(); ctx.ellipse(bx + aw*cloudW*0.08, y - cloudH*0.18, cloudW*0.44, cloudH*0.34, 0, 0, Math.PI*2); ctx.fill();
+
+    // Soft rain streaks below the cloud
+    ctx.strokeStyle = 'rgba(160,140,200,0.16)';
+    ctx.lineWidth = 0.8;
+    for (let i = -2; i <= 3; i++) {
+      const rx = bx + aw*i*cloudW*0.14;
+      ctx.beginPath();
+      ctx.moveTo(rx,   y + cloudH*0.42);
+      ctx.lineTo(rx-3, y + cloudH*0.42 + 20);
+      ctx.stroke();
+    }
+  }
+
+  // Subtle gap corridor glow so player can read the safe passage
+  ctx.save();
+  ctx.strokeStyle = 'rgba(200,170,255,0.28)';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4, 10]);
+  ctx.beginPath(); ctx.moveTo(cx-hw, y-44); ctx.lineTo(cx-hw, y+44); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(cx+hw, y-44); ctx.lineTo(cx+hw, y+44); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
+}
+
+function drawBird(bx,y,t) {
+  const flap=Math.sin(t*0.016)*0.45;
+  ctx.strokeStyle='rgba(180,185,230,0.72)'; ctx.lineWidth=1.6; ctx.lineCap='round';
+  ctx.beginPath();
+  ctx.moveTo(bx-13,y+flap*9); ctx.quadraticCurveTo(bx-6,y-4+flap*4,bx,y);
+  ctx.quadraticCurveTo(bx+6,y-4+flap*4,bx+13,y+flap*9); ctx.stroke();
+}
+
+function drawObstacles() {
+  obstacles.forEach(o=>{
+    if (o.y<-100||o.y>H()+100) return;
+    ctx.save();
+    if (o.type==='branch') drawBranch(o.cx,o.hw,o.y);
+    else if (o.type==='wire') drawWire(o.cx,o.hw,o.y);
+    else if (o.type==='cloud') drawCloud(o.cx,o.hw,o.cloudW,o.y);
+    else if (o.type==='bird') drawBird(o.birdX,o.y,o.t);
+    ctx.restore();
+  });
+}
+
+function drawParticles() {
+  ctx.save();
+  particles.forEach(p=>{
+    ctx.globalAlpha=p.life*0.88;
+    ctx.fillStyle=`rgb(255,${Math.floor(180*p.life)},50)`;
+    ctx.beginPath(); ctx.arc(p.x,p.y,p.size*p.life,0,Math.PI*2); ctx.fill();
+  });
+  embers.forEach(e=>{
+    ctx.globalAlpha=e.life*0.8; ctx.fillStyle=e.col;
+    ctx.beginPath(); ctx.arc(e.x,e.y,e.size*e.life,0,Math.PI*2); ctx.fill();
+  });
+  ctx.globalAlpha=1; ctx.restore();
+}
+
+function drawLantern() {
+  const lx=lantern.x+shakeX, ly=lantern.y+shakeY;
+  const skin=SKINS[currentSkin];
+  const flicker=lantern.alive ? Math.sin(lantern.flickerT*8)*0.12 : 0;
+  const glowAmt=lantern.alive ? 1 : Math.max(0, 1-lantern.deathTimer/2200);
+  ctx.save();
+  ctx.translate(lx, ly);
+  ctx.rotate(lantern.angle);
+  if (glowAmt>0) {
+    const gs=85+flicker*20;
+    const glow=ctx.createRadialGradient(0,0,0,0,0,gs*glowAmt);
+    glow.addColorStop(0,`rgba(255,180,50,${(0.26+flicker*0.1)*glowAmt})`);
+    glow.addColorStop(0.4,`rgba(255,120,20,${(0.13+flicker*0.05)*glowAmt})`);
+    glow.addColorStop(1,'rgba(255,80,0,0)');
+    ctx.fillStyle=glow; ctx.beginPath(); ctx.arc(0,0,gs,0,Math.PI*2); ctx.fill();
+  }
+  // String
+  ctx.strokeStyle=skin.string; ctx.lineWidth=1.3;
+  ctx.beginPath(); ctx.moveTo(-5,-22); ctx.lineTo(0,-31); ctx.lineTo(5,-22); ctx.stroke();
+  // Body
+  const bh=37,bw=25;
+  const bg=ctx.createLinearGradient(-bw,0,bw,0);
+  bg.addColorStop(0,'rgba(0,0,0,0.38)'); bg.addColorStop(0.28,skin.body);
+  bg.addColorStop(0.7,skin.accent); bg.addColorStop(1,'rgba(0,0,0,0.3)');
+  ctx.fillStyle=bg;
+  ctx.beginPath(); ctx.moveTo(0,-bh/2);
+  ctx.bezierCurveTo(bw,-bh/2,bw,bh/2,0,bh/2);
+  ctx.bezierCurveTo(-bw,bh/2,-bw,-bh/2,0,-bh/2); ctx.fill();
+  ctx.strokeStyle=skin.string; ctx.lineWidth=0.8; ctx.globalAlpha=0.35; ctx.stroke(); ctx.globalAlpha=1;
+  // Ribs
+  for (let i=-1; i<=1; i+=2) {
+    ctx.strokeStyle=skin.string; ctx.lineWidth=0.6; ctx.globalAlpha=0.35;
+    ctx.beginPath(); ctx.moveTo(i*bw*0.3,-bh/2); ctx.lineTo(i*bw*0.3,bh/2); ctx.stroke();
+    ctx.globalAlpha=1;
+  }
+  // Flame
+  if (lantern.alive) {
+    const fs=9+flicker*3;
+    const fg=ctx.createRadialGradient(0,0,0,0,0,fs);
+    fg.addColorStop(0,'rgba(255,255,200,0.95)'); fg.addColorStop(0.5,'rgba(255,180,50,0.7)'); fg.addColorStop(1,'rgba(255,80,0,0)');
+    ctx.fillStyle=fg; ctx.beginPath(); ctx.arc(0,0,fs,0,Math.PI*2); ctx.fill();
+  }
+  // Tassel
+  ctx.strokeStyle=skin.string; ctx.lineWidth=1.2;
+  ctx.beginPath(); ctx.moveTo(-4,bh/2); ctx.lineTo(0,bh/2+8); ctx.lineTo(4,bh/2); ctx.stroke();
+  ctx.restore();
+}
+
+function drawWindStreaks() {
+  const t=Date.now()*0.001;
+  ctx.save(); ctx.globalAlpha=0.12; ctx.strokeStyle='rgba(200,220,255,0.7)'; ctx.lineWidth=0.6;
+  for (let i=0; i<7; i++) {
+    const px=((i*210+t*wind.x*110+210)%(W()+100))-50;
+    const py=((i*160+t*38)%H());
+    ctx.beginPath(); ctx.moveTo(px,py); ctx.lineTo(px+wind.x*35,py+wind.y*12); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawHUD() {
+  if (gameState !== 'playing') return;
+  scoreEl.textContent = Math.floor(score);
+}
+
+// Game loop
+let lastTime = 0;
+function loop(now) {
+  const dt = Math.min(now - lastTime, 50); lastTime = now;
+  ctx.save();
+  drawSky(); drawMoon(); drawStars(); drawFog(); drawWindStreaks();
+  if (gameState==='playing' || gameState==='dead') {
+    updateWind(dt);
+    updateLantern(dt);
+    updateObstacles(dt);
+    updateParticles(dt);
+    drawObstacles();
+    drawParticles();
+    drawLantern();
+    drawHUD();
+  }
+  ctx.restore();
+  raf = requestAnimationFrame(loop);
+}
+
+function startGame() {
+  overlay.style.display='none';
+  scoreEl.style.display='block';
+  gameState='playing';
+  initGame();
+  if (!raf) { lastTime=performance.now(); raf=requestAnimationFrame(loop); }
+}
+
+function endGame() {
+  if (gameState==='ended') return;
+  gameState='ended';
+  const s=Math.floor(score);
+  if (s>bestScore) { bestScore=s; try{localStorage.setItem('wl_best',bestScore)}catch(e){} }
+  scoreEl.style.display='none'; comboEl.style.opacity='0';
+  setTimeout(()=>showEndScreen(s), 200);
+}
+
+function showEndScreen(s) {
+  overlay.innerHTML=`
+    <div class="overlay-title" style="font-size:26px;margin-bottom:4px">the flame is gone</div>
+    <div class="overlay-sub">your lantern has fallen</div>
+    <div class="high-score-row">
+      <div class="score-block"><div class="score-label">score</div><div class="big-score">${s}</div></div>
+      <div class="score-block"><div class="score-label">best</div><div class="big-score" style="color:rgba(255,220,100,0.5)">${bestScore}</div></div>
+    </div>
+    <button class="play-btn" id="retryBtn">Try Again</button>`;
+  overlay.style.display='flex';
+  document.getElementById('retryBtn').addEventListener('click', showMenu);
+}
+
+function showMenu() {
+  const cel=bestScore>=500;
+  overlay.innerHTML=`
+    <div class="lantern-icon">🏮</div>
+    <div class="overlay-title">WISH LANTERN</div>
+    <div class="overlay-sub">a peaceful lantern against the night</div>
+    <div id="skin-select">
+      <button class="skin-btn ${currentSkin==='classic'?'active':''}" data-skin="classic">Classic</button>
+      <button class="skin-btn ${currentSkin==='sakura'?'active':''}" data-skin="sakura">Sakura</button>
+      <button class="skin-btn ${currentSkin==='celestial'?'active':''} ${!cel?'':''}${!cel?'disabled':''}" data-skin="celestial" ${!cel?'disabled title="Reach 500 to unlock"':''}>Celestial${!cel?' 🔒':''}</button>
+    </div>
+    <button class="play-btn" id="playBtn">Begin</button>
+    <div id="tip">best: ${bestScore} · space or click to rise · survive the sky</div>`;
+  overlay.style.display='flex';
+  document.getElementById('playBtn').addEventListener('click', startGame);
+  document.querySelectorAll('.skin-btn').forEach(b=>{
+    b.addEventListener('click',()=>{
+      if (b.disabled) return;
+      currentSkin=b.dataset.skin;
+      document.querySelectorAll('.skin-btn').forEach(x=>x.classList.remove('active'));
+      b.classList.add('active');
+    });
+  });
+}
+
+// Boot
+lastTime = performance.now();
+raf = requestAnimationFrame(loop);
+
+// Controls
+document.getElementById('playBtn').addEventListener('click', startGame);
+document.querySelectorAll('.skin-btn').forEach(b=>{
+  b.addEventListener('click',()=>{
+    if (b.disabled) return;
+    currentSkin=b.dataset.skin;
+    document.querySelectorAll('.skin-btn').forEach(x=>x.classList.remove('active'));
+    b.classList.add('active');
+  });
+});
+canvas.addEventListener('touchstart', e=>{
+  e.preventDefault();
+  if (gameState==='playing') {
+    const touch = e.changedTouches[0];
+    // Option C: nudge direction based on tap position relative to lantern center
+    const tapX = touch.clientX;
+    const nudge = (tapX - lantern.x) / (W() * 0.35); // stronger, tighter ratio
+    flap(Math.max(-1, Math.min(1, nudge * 1.4)));
+  }
+}, {passive:false});
+canvas.addEventListener('mousedown', e=>{ if(gameState==='playing') flap(); });
+document.addEventListener('keydown', e=>{
+  if (e.code==='Space'||e.code==='ArrowUp') { e.preventDefault(); if(gameState==='playing') flap(); }
+  // Prevent arrow keys scrolling the page
+  if (['ArrowLeft','ArrowRight','ArrowDown'].includes(e.code)) e.preventDefault();
+});
+</script>
+</body>
+</html>
